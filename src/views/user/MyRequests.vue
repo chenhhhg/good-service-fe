@@ -254,33 +254,46 @@ const openDialog = async (mode: string, data?: any) => {
 
     if (data.imageFiles) {
       const imageFiles = data.imageFiles.split(',').filter(Boolean)
-      const urlsAndResponses = await Promise.all(
-        imageFiles.map(async (fileName: string) => {
-          try {
-            const blob = await downloadFile(fileName)
-            const url = URL.createObjectURL(blob)
-            imageBlobUrls.value.push(url) // Track for revocation
-            return { name: fileName, url, response: { fileName } }
-          } catch (error) {
-            console.error('Failed to load image:', fileName, error)
-            return { name: fileName, url: '', response: { fileName } }
-          }
-        }),
-      )
-      imageList.value = urlsAndResponses
+      const placeholderFiles = imageFiles.map((fileName: string) => ({
+        name: fileName,
+        url: '',
+        status: 'uploading',
+        response: { fileName },
+      }))
+      imageList.value = placeholderFiles
+
+      placeholderFiles.forEach(async (file) => {
+        try {
+          const blob = await downloadFile(file.name)
+          const url = URL.createObjectURL(blob)
+          imageBlobUrls.value.push(url) // Track for revocation
+          file.url = url
+          file.status = 'success'
+        } catch (error) {
+          console.error('Failed to load image:', file.name, error)
+          file.status = 'fail'
+        }
+      })
     }
 
     if (data.videoFile) {
+      const placeholderVideo = {
+        name: data.videoFile,
+        url: '',
+        status: 'uploading',
+        response: { fileName: data.videoFile },
+      }
+      videoList.value = [placeholderVideo]
+
       try {
         const blob = await downloadFile(data.videoFile)
         const url = URL.createObjectURL(blob)
         videoBlobUrl.value = url // Track for revocation
-        videoList.value = [
-          { name: data.videoFile, url, response: { fileName: data.videoFile } },
-        ]
+        placeholderVideo.url = url
+        placeholderVideo.status = 'success'
       } catch (error) {
         console.error('Failed to load video:', data.videoFile, error)
-        videoList.value = [{ name: data.videoFile, url: '', response: { fileName: data.videoFile } }]
+        placeholderVideo.status = 'fail'
       }
     }
   }

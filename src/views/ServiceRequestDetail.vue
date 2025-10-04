@@ -22,32 +22,56 @@
       <p class="description-text">{{ requestDetail.description }}</p>
 
       <div class="media-section">
-        <div v-if="imageBlobUrls.length" class="image-gallery">
+        <div v-if="mainImageInfo.length" class="image-gallery">
           <h3>图片资料</h3>
-          <el-image
-            v-for="url in imageBlobUrls"
-            :key="url"
-            :src="url"
-            :preview-src-list="imageBlobUrls"
-            fit="cover"
-            style="width: 100px; height: 100px; margin-right: 10px"
-            :initial-index="9999"
-          >
-            <template #placeholder>
-              <div class="image-slot">
+          <div class="image-list-container">
+            <template v-for="img in mainImageInfo" :key="img.name">
+              <div
+                v-if="img.status === 'loading'"
+                class="image-slot"
+                style="width: 100px; height: 100px; margin-right: 10px"
+              >
                 <el-icon><Loading /></el-icon>
               </div>
+              <el-image
+                v-else
+                :src="img.url"
+                :preview-src-list="mainImageInfo.map((i) => i.url).filter(Boolean)"
+                fit="cover"
+                style="width: 100px; height: 100px; margin-right: 10px"
+                :initial-index="200000"
+              >
+                <template #error>
+                  <div class="image-slot">
+                    <el-icon><Picture /></el-icon>
+                  </div>
+                </template>
+              </el-image>
             </template>
-            <template #error>
-              <div class="image-slot">
-                <el-icon><Picture /></el-icon>
-              </div>
-            </template>
-          </el-image>
+          </div>
         </div>
-        <div v-if="videoBlobUrl" class="video-player">
+        <div v-if="mainVideoInfo" class="video-player">
           <h3>视频资料</h3>
-          <video :src="videoBlobUrl" controls style="width: 100%; max-width: 500px"></video>
+          <div
+            v-if="mainVideoInfo.status === 'loading'"
+            class="video-placeholder image-slot"
+            style="width: 100%; max-width: 500px; height: 281px"
+          >
+            <el-icon><Loading /></el-icon>
+          </div>
+          <video
+            v-else-if="mainVideoInfo.status === 'success'"
+            :src="mainVideoInfo.url"
+            controls
+            style="width: 100%; max-width: 500px"
+          ></video>
+          <div
+            v-else
+            class="video-placeholder image-slot"
+            style="width: 100%; max-width: 500px; height: 281px"
+          >
+            <el-icon><Picture /></el-icon>
+          </div>
         </div>
       </div>
 
@@ -71,25 +95,29 @@
           <el-table-column prop="description" label="响应描述" />
           <el-table-column label="图片">
             <template #default="{ row }">
-              <el-image
-                v-if="row.imageBlobUrls && row.imageBlobUrls.length > 0"
-                :src="row.imageBlobUrls[0]"
-                :preview-src-list="row.imageBlobUrls"
-                style="width: 50px; height: 50px"
-                fit="cover"
-                :initial-index="9999"
-              >
-                <template #placeholder>
-                  <div class="image-slot">
-                    <el-icon><Loading /></el-icon>
-                  </div>
-                </template>
-                <template #error>
-                  <div class="image-slot">
-                    <el-icon><Picture /></el-icon>
-                  </div>
-                </template>
-              </el-image>
+              <div v-if="row.imageInfo && row.imageInfo.length > 0">
+                <div
+                  v-if="row.imageInfo[0].status === 'loading'"
+                  class="image-slot"
+                  style="width: 50px; height: 50px"
+                >
+                  <el-icon><Loading /></el-icon>
+                </div>
+                <el-image
+                  v-else
+                  :src="row.imageInfo[0].url"
+                  :preview-src-list="row.imageInfo.map((i: any) => i.url).filter(Boolean)"
+                  style="width: 50px; height: 50px"
+                  fit="cover"
+                  :initial-index="200000"
+                >
+                  <template #error>
+                    <div class="image-slot">
+                      <el-icon><Picture /></el-icon>
+                    </div>
+                  </template>
+                </el-image>
+              </div>
               <span v-else>无</span>
             </template>
           </el-table-column>
@@ -210,8 +238,13 @@ const responseRules = reactive<FormRules>({
 const imageList = ref<UploadUserFile[]>([])
 const videoList = ref<UploadUserFile[]>([])
 
-const imageBlobUrls = ref<string[]>([])
-const videoBlobUrl = ref<string>('')
+const mainImageInfo =
+  ref<{ name: string; url: string; status: 'loading' | 'success' | 'fail' }[]>([])
+const mainVideoInfo = ref<{
+  name: string
+  url: string
+  status: 'loading' | 'success' | 'fail'
+} | null>(null)
 
 const isOwner = computed(() => {
   if (!userStore.isLoggedIn || !requestDetail.value) return false
@@ -233,28 +266,34 @@ const fetchData = async () => {
 
       // Clean up old blob urls before processing new ones
       responses.value.forEach((response) => {
-        if (response.imageBlobUrls) {
-          response.imageBlobUrls.forEach((url: string) => URL.revokeObjectURL(url))
+        if (response.imageInfo) {
+          response.imageInfo.forEach((img: any) => {
+            if (img.url) URL.revokeObjectURL(img.url)
+          })
         }
       })
 
       // Process new responses
       for (const response of fetchedResponses) {
-        response.imageBlobUrls = []
+        response.imageInfo = []
         if (response.imageFiles) {
-          const imageFiles = response.imageFiles.split(',')
-          const urls = await Promise.all(
-            imageFiles.map(async (fileName: string) => {
-              try {
-                const blob = await downloadFile(fileName)
-                return URL.createObjectURL(blob)
-              } catch (error) {
-                console.error(`Failed to download image ${fileName}`, error)
-                return ''
-              }
-            }),
-          )
-          response.imageBlobUrls = urls.filter((url) => url)
+          const imageFiles = response.imageFiles.split(',').filter(Boolean)
+          response.imageInfo = imageFiles.map((fileName: string) => ({
+            name: fileName,
+            url: '',
+            status: 'loading',
+          }))
+
+          response.imageInfo.forEach(async (img: any) => {
+            try {
+              const blob = await downloadFile(img.name)
+              img.url = URL.createObjectURL(blob)
+              img.status = 'success'
+            } catch (error) {
+              console.error(`Failed to download image ${img.name}`, error)
+              img.status = 'fail'
+            }
+          })
         }
       }
       responses.value = fetchedResponses
@@ -271,36 +310,49 @@ watch(
   () => requestDetail.value,
   async (newDetail) => {
     // Revoke previous blob URLs
-    imageBlobUrls.value.forEach((url) => URL.revokeObjectURL(url))
-    if (videoBlobUrl.value) {
-      URL.revokeObjectURL(videoBlobUrl.value)
+    mainImageInfo.value.forEach((img) => {
+      if (img.url) URL.revokeObjectURL(img.url)
+    })
+    if (mainVideoInfo.value?.url) {
+      URL.revokeObjectURL(mainVideoInfo.value.url)
     }
-    imageBlobUrls.value = []
-    videoBlobUrl.value = ''
+    mainImageInfo.value = []
+    mainVideoInfo.value = null
 
     if (newDetail) {
       if (newDetail.imageFiles) {
-        const imageFiles = newDetail.imageFiles.split(',')
-        const urls = await Promise.all(
-          imageFiles.map(async (fileName: string) => {
-            try {
-              const blob = await downloadFile(fileName)
-              return URL.createObjectURL(blob)
-            } catch (error) {
-              console.error(`Failed to download image ${fileName}`, error)
-              return ''
-            }
-          }),
-        )
-        imageBlobUrls.value = urls.filter((url) => url)
+        const imageFiles = newDetail.imageFiles.split(',').filter(Boolean)
+        mainImageInfo.value = imageFiles.map((fileName: string) => ({
+          name: fileName,
+          url: '',
+          status: 'loading',
+        }))
+
+        mainImageInfo.value.forEach(async (img) => {
+          try {
+            const blob = await downloadFile(img.name)
+            img.url = URL.createObjectURL(blob)
+            img.status = 'success'
+          } catch (error) {
+            console.error(`Failed to download image ${img.name}`, error)
+            img.status = 'fail'
+          }
+        })
       }
 
       if (newDetail.videoFile) {
+        mainVideoInfo.value = {
+          name: newDetail.videoFile,
+          url: '',
+          status: 'loading',
+        }
         try {
           const blob = await downloadFile(newDetail.videoFile)
-          videoBlobUrl.value = URL.createObjectURL(blob)
+          mainVideoInfo.value.url = URL.createObjectURL(blob)
+          mainVideoInfo.value.status = 'success'
         } catch (error) {
           console.error(`Failed to download video ${newDetail.videoFile}`, error)
+          mainVideoInfo.value.status = 'fail'
         }
       }
     }
@@ -309,13 +361,17 @@ watch(
 )
 
 onUnmounted(() => {
-  imageBlobUrls.value.forEach((url) => URL.revokeObjectURL(url))
-  if (videoBlobUrl.value) {
-    URL.revokeObjectURL(videoBlobUrl.value)
+  mainImageInfo.value.forEach((img) => {
+    if (img.url) URL.revokeObjectURL(img.url)
+  })
+  if (mainVideoInfo.value?.url) {
+    URL.revokeObjectURL(mainVideoInfo.value.url)
   }
   responses.value.forEach((response) => {
-    if (response.imageBlobUrls) {
-      response.imageBlobUrls.forEach((url: string) => URL.revokeObjectURL(url))
+    if (response.imageInfo) {
+      response.imageInfo.forEach((img: any) => {
+        if (img.url) URL.revokeObjectURL(img.url)
+      })
     }
   })
 })
@@ -446,6 +502,10 @@ onMounted(() => {
 .image-gallery,
 .video-player {
   margin-bottom: 20px;
+}
+.image-list-container {
+  display: flex;
+  flex-wrap: wrap;
 }
 .image-slot {
   display: flex;
