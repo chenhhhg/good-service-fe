@@ -20,7 +20,36 @@
         }}</el-descriptions-item>
       </el-descriptions>
       <p class="description-text">{{ requestDetail.description }}</p>
-      <!-- TODO: Display images/videos -->
+
+      <div class="media-section">
+        <div v-if="imageBlobUrls.length" class="image-gallery">
+          <h3>图片资料</h3>
+          <el-image
+            v-for="url in imageBlobUrls"
+            :key="url"
+            :src="url"
+            :preview-src-list="imageBlobUrls"
+            fit="cover"
+            style="width: 100px; height: 100px; margin-right: 10px"
+            :initial-index="9999"
+          >
+            <template #placeholder>
+              <div class="image-slot">
+                <el-icon><Loading /></el-icon>
+              </div>
+            </template>
+            <template #error>
+              <div class="image-slot">
+                <el-icon><Picture /></el-icon>
+              </div>
+            </template>
+          </el-image>
+        </div>
+        <div v-if="videoBlobUrl" class="video-player">
+          <h3>视频资料</h3>
+          <video :src="videoBlobUrl" controls style="width: 100%; max-width: 500px"></video>
+        </div>
+      </div>
 
       <!-- Part 2: Action Buttons -->
       <div
@@ -40,6 +69,30 @@
         <el-table :data="responses" stripe>
           <el-table-column prop="user.name" label="响应者" />
           <el-table-column prop="description" label="响应描述" />
+          <el-table-column label="图片">
+            <template #default="{ row }">
+              <el-image
+                v-if="row.imageBlobUrls && row.imageBlobUrls.length > 0"
+                :src="row.imageBlobUrls[0]"
+                :preview-src-list="row.imageBlobUrls"
+                style="width: 50px; height: 50px"
+                fit="cover"
+                :initial-index="9999"
+              >
+                <template #placeholder>
+                  <div class="image-slot">
+                    <el-icon><Loading /></el-icon>
+                  </div>
+                </template>
+                <template #error>
+                  <div class="image-slot">
+                    <el-icon><Picture /></el-icon>
+                  </div>
+                </template>
+              </el-image>
+              <span v-else>无</span>
+            </template>
+          </el-table-column>
           <el-table-column label="状态">
             <template #default="{ row }">
               <el-tag :type="statusTagType(row.status)">{{ statusText(row.status) }}</el-tag>
@@ -77,25 +130,29 @@
         <el-form-item label="图片">
           <el-upload
             v-model:file-list="imageList"
-            action="/api/files/upload"
             list-type="picture-card"
             multiple
             :on-success="handleImageSuccess"
             :on-remove="handleImageRemove"
+            :http-request="handleResponseImageUpload"
+            :before-upload="beforeImageUpload"
           >
             <el-icon><Plus /></el-icon>
           </el-upload>
+          <div class="el-upload__tip">单张图片大小不能超过 1MB</div>
         </el-form-item>
         <el-form-item label="视频">
           <el-upload
             v-model:file-list="videoList"
-            action="/api/files/upload"
             :limit="1"
             :on-success="handleVideoSuccess"
             :on-remove="handleVideoRemove"
+            :http-request="handleResponseVideoUpload"
+            :before-upload="beforeVideoUpload"
           >
             <el-button type="primary">点击上传</el-button>
           </el-upload>
+          <div class="el-upload__tip">视频大小不能超过 50MB</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -107,18 +164,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, reactive } from 'vue'
+import { ref, onMounted, computed, reactive, watch, onUnmounted } from 'vue'
 import { getServiceRequestById } from '@/api/request'
 import {
   getResponsesByRequestId,
   createServiceResponse,
   updateResponseStatus,
 } from '@/api/response'
+import { downloadFile, uploadFile } from '@/api/file'
 import { useUserStore } from '@/store/user'
 import { useRegionStore } from '@/store/region'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FormInstance, FormRules, UploadUserFile } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import type {
+  FormInstance,
+  FormRules,
+  UploadUserFile,
+  UploadRequestOptions,
+  UploadProps,
+} from 'element-plus'
+import { Plus, Loading, Picture } from '@element-plus/icons-vue'
 
 const props = defineProps({
   id: { type: String, required: true },
@@ -146,6 +210,9 @@ const responseRules = reactive<FormRules>({
 const imageList = ref<UploadUserFile[]>([])
 const videoList = ref<UploadUserFile[]>([])
 
+const imageBlobUrls = ref<string[]>([])
+const videoBlobUrl = ref<string>('')
+
 const isOwner = computed(() => {
   if (!userStore.isLoggedIn || !requestDetail.value) return false
   return userStore.userInfo?.id === requestDetail.value.user.id
@@ -162,7 +229,35 @@ const fetchData = async () => {
     if (isOwner.value) {
       const res = await getResponsesByRequestId(props.id, {})
       resCnt.value = res.total
-      responses.value = res.data || []
+      const fetchedResponses = res.data || []
+
+      // Clean up old blob urls before processing new ones
+      responses.value.forEach((response) => {
+        if (response.imageBlobUrls) {
+          response.imageBlobUrls.forEach((url: string) => URL.revokeObjectURL(url))
+        }
+      })
+
+      // Process new responses
+      for (const response of fetchedResponses) {
+        response.imageBlobUrls = []
+        if (response.imageFiles) {
+          const imageFiles = response.imageFiles.split(',')
+          const urls = await Promise.all(
+            imageFiles.map(async (fileName: string) => {
+              try {
+                const blob = await downloadFile(fileName)
+                return URL.createObjectURL(blob)
+              } catch (error) {
+                console.error(`Failed to download image ${fileName}`, error)
+                return ''
+              }
+            }),
+          )
+          response.imageBlobUrls = urls.filter((url) => url)
+        }
+      }
+      responses.value = fetchedResponses
     }
   } catch (error) {
     ElMessage.error('获取详情失败')
@@ -171,6 +266,59 @@ const fetchData = async () => {
     loading.value = false
   }
 }
+
+watch(
+  () => requestDetail.value,
+  async (newDetail) => {
+    // Revoke previous blob URLs
+    imageBlobUrls.value.forEach((url) => URL.revokeObjectURL(url))
+    if (videoBlobUrl.value) {
+      URL.revokeObjectURL(videoBlobUrl.value)
+    }
+    imageBlobUrls.value = []
+    videoBlobUrl.value = ''
+
+    if (newDetail) {
+      if (newDetail.imageFiles) {
+        const imageFiles = newDetail.imageFiles.split(',')
+        const urls = await Promise.all(
+          imageFiles.map(async (fileName: string) => {
+            try {
+              const blob = await downloadFile(fileName)
+              return URL.createObjectURL(blob)
+            } catch (error) {
+              console.error(`Failed to download image ${fileName}`, error)
+              return ''
+            }
+          }),
+        )
+        imageBlobUrls.value = urls.filter((url) => url)
+      }
+
+      if (newDetail.videoFile) {
+        try {
+          const blob = await downloadFile(newDetail.videoFile)
+          videoBlobUrl.value = URL.createObjectURL(blob)
+        } catch (error) {
+          console.error(`Failed to download video ${newDetail.videoFile}`, error)
+        }
+      }
+    }
+  },
+  { deep: true },
+)
+
+onUnmounted(() => {
+  imageBlobUrls.value.forEach((url) => URL.revokeObjectURL(url))
+  if (videoBlobUrl.value) {
+    URL.revokeObjectURL(videoBlobUrl.value)
+  }
+  responses.value.forEach((response) => {
+    if (response.imageBlobUrls) {
+      response.imageBlobUrls.forEach((url: string) => URL.revokeObjectURL(url))
+    }
+  })
+})
 
 const submitResponse = async () => {
   if (!responseFormRef.value) return
@@ -211,6 +359,48 @@ const handleStatusUpdate = async (responseId: number, status: number) => {
   }
 }
 
+const beforeImageUpload: UploadProps['beforeUpload'] = (rawFile) => {
+  if (rawFile.type.indexOf('image') < 0) {
+    ElMessage.error('请上传图片文件')
+    return false
+  }
+  if (rawFile.size / 1024 / 1024 > 1) {
+    ElMessage.error('图片大小不能超过 1MB!')
+    return false
+  }
+  return true
+}
+
+const beforeVideoUpload: UploadProps['beforeUpload'] = (rawFile) => {
+  if (rawFile.type.indexOf('video') < 0) {
+    ElMessage.error('请上传视频文件')
+    return false
+  }
+  if (rawFile.size / 1024 / 1024 > 50) {
+    ElMessage.error('视频大小不能超过 50MB!')
+    return false
+  }
+  return true
+}
+
+const handleResponseImageUpload = async (options: UploadRequestOptions) => {
+  try {
+    const res = await uploadFile(options.file)
+    options.onSuccess(res)
+  } catch (error) {
+    options.onError(error as any)
+  }
+}
+
+const handleResponseVideoUpload = async (options: UploadRequestOptions) => {
+  try {
+    const res = await uploadFile(options.file)
+    options.onSuccess(res)
+  } catch (error) {
+    options.onError(error as any)
+  }
+}
+
 const resetResponseForm = () => {
   responseForm.description = ''
   responseForm.imageFiles = ''
@@ -219,23 +409,27 @@ const resetResponseForm = () => {
   videoList.value = []
 }
 
-const handleImageSuccess = (response: any) => {
+const handleImageSuccess = (response: any, file: any) => {
+  file.response = response
   const currentImages = responseForm.imageFiles ? responseForm.imageFiles.split(',') : []
   currentImages.push(response.fileName)
   responseForm.imageFiles = currentImages.join(',')
 }
 
 const handleImageRemove = (file: any) => {
-  const fileNameToRemove = file.response.fileName
-  const currentImages = responseForm.imageFiles.split(',')
-  responseForm.imageFiles = currentImages.filter((name) => name !== fileNameToRemove).join(',')
+  const fileNameToRemove = file.response?.fileName
+  if (fileNameToRemove) {
+    const currentImages = responseForm.imageFiles.split(',')
+    responseForm.imageFiles = currentImages.filter((name) => name !== fileNameToRemove).join(',')
+  }
 }
 
-const handleVideoSuccess = (response: any) => {
+const handleVideoSuccess = (response: any, file: any) => {
+  file.response = response
   responseForm.videoFile = response.fileName
 }
 
-const handleVideoRemove = () => {
+const handleVideoRemove = (file: any) => {
   responseForm.videoFile = ''
 }
 
@@ -246,6 +440,25 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.media-section {
+  margin-top: 20px;
+}
+.image-gallery,
+.video-player {
+  margin-bottom: 20px;
+}
+.image-slot {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+}
+.image-slot .el-icon {
+  font-size: 24px;
+}
 .description-text {
   margin-top: 20px;
   line-height: 1.6;

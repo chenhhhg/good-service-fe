@@ -25,6 +25,7 @@
       </el-table-column>
       <el-table-column label="操作">
         <template #default="{ row }">
+          <el-button size="small" @click="viewDetails(row.id)">查看详情</el-button>
           <el-button size="small" @click="openDialog('edit', row)">修改</el-button>
           <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
         </template>
@@ -74,25 +75,29 @@
         <el-form-item label="图片">
           <el-upload
             v-model:file-list="imageList"
-            action="/api/files/upload"
             list-type="picture-card"
             multiple
             :on-success="handleImageSuccess"
             :on-remove="handleImageRemove"
+            :http-request="handleImageUpload"
+            :before-upload="beforeImageUpload"
           >
             <el-icon><Plus /></el-icon>
           </el-upload>
+          <div class="el-upload__tip">单张图片大小不能超过 1MB</div>
         </el-form-item>
         <el-form-item label="视频">
           <el-upload
             v-model:file-list="videoList"
-            action="/api/files/upload"
             :limit="1"
             :on-success="handleVideoSuccess"
             :on-remove="handleVideoRemove"
+            :http-request="handleVideoUpload"
+            :before-upload="beforeVideoUpload"
           >
             <el-button type="primary">点击上传</el-button>
           </el-upload>
+          <div class="el-upload__tip">视频大小不能超过 50MB</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -104,7 +109,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import { useRegionStore } from '@/store/region'
 import {
@@ -114,10 +120,18 @@ import {
   deleteServiceRequest,
   getServiceTypes,
 } from '@/api/request'
+import { uploadFile, downloadFile } from '@/api/file'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FormInstance, FormRules, UploadUserFile } from 'element-plus'
+import type {
+  FormInstance,
+  FormRules,
+  UploadUserFile,
+  UploadRequestOptions,
+  UploadProps,
+} from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 
+const router = useRouter()
 const userStore = useUserStore()
 const regionStore = useRegionStore()
 const requests = ref<any[]>([])
@@ -150,6 +164,28 @@ const requestRules = reactive<FormRules>({
 const imageList = ref<UploadUserFile[]>([])
 const videoList = ref<UploadUserFile[]>([])
 
+const imageBlobUrls = ref<string[]>([])
+const videoBlobUrl = ref<string>('')
+
+const revokeBlobUrls = () => {
+  imageBlobUrls.value.forEach((url) => URL.revokeObjectURL(url))
+  if (videoBlobUrl.value) {
+    URL.revokeObjectURL(videoBlobUrl.value)
+  }
+  imageBlobUrls.value = []
+  videoBlobUrl.value = ''
+}
+
+watch(dialogVisible, (isVisible) => {
+  if (!isVisible) {
+    revokeBlobUrls()
+  }
+})
+
+onUnmounted(() => {
+  revokeBlobUrls()
+})
+
 const provinces = computed(() => (regionStore.regions ? Object.keys(regionStore.regions) : []))
 const cities = computed(() => {
   return selectedProvince.value && regionStore.regions
@@ -177,7 +213,7 @@ const fetchMyRequests = async () => {
     await userStore.fetchUserInfo()
   }
   try {
-    const res = await getServiceRequestsByUserId(userStore.userInfo.id, {})
+    const res = await getServiceRequestsByUserId(Number(userStore.userInfo.id), {})
     requests.value = res.data || []
   } catch (error) {
     ElMessage.error('获取我的需求列表失败')
@@ -199,9 +235,10 @@ const resetForm = () => {
   requestForm.videoFile = ''
   imageList.value = []
   videoList.value = []
+  revokeBlobUrls()
 }
 
-const openDialog = (mode: string, data?: any) => {
+const openDialog = async (mode: string, data?: any) => {
   resetForm()
   dialogMode.value = mode
   if (mode === 'edit' && data) {
@@ -216,20 +253,35 @@ const openDialog = (mode: string, data?: any) => {
     }
 
     if (data.imageFiles) {
-      imageList.value = data.imageFiles.split(',').map((fileName: string) => ({
-        name: fileName,
-        url: `/api/files/download/${fileName}`,
-        response: { fileName },
-      }))
+      const imageFiles = data.imageFiles.split(',').filter(Boolean)
+      const urlsAndResponses = await Promise.all(
+        imageFiles.map(async (fileName: string) => {
+          try {
+            const blob = await downloadFile(fileName)
+            const url = URL.createObjectURL(blob)
+            imageBlobUrls.value.push(url) // Track for revocation
+            return { name: fileName, url, response: { fileName } }
+          } catch (error) {
+            console.error('Failed to load image:', fileName, error)
+            return { name: fileName, url: '', response: { fileName } }
+          }
+        }),
+      )
+      imageList.value = urlsAndResponses
     }
+
     if (data.videoFile) {
-      videoList.value = [
-        {
-          name: data.videoFile,
-          url: `/api/files/download/${data.videoFile}`,
-          response: { fileName: data.videoFile },
-        },
-      ]
+      try {
+        const blob = await downloadFile(data.videoFile)
+        const url = URL.createObjectURL(blob)
+        videoBlobUrl.value = url // Track for revocation
+        videoList.value = [
+          { name: data.videoFile, url, response: { fileName: data.videoFile } },
+        ]
+      } catch (error) {
+        console.error('Failed to load video:', data.videoFile, error)
+        videoList.value = [{ name: data.videoFile, url: '', response: { fileName: data.videoFile } }]
+      }
     }
   }
   dialogVisible.value = true
@@ -241,8 +293,7 @@ const submitForm = async () => {
     if (valid) {
       try {
         if (dialogMode.value === 'create') {
-          const payload = { ...requestForm, userId: userStore.userInfo.id }
-          delete payload.id // No need to send null id
+          const { id, ...payload } = { ...requestForm, userId: userStore.userInfo.id }
           await createServiceRequest(payload)
           ElMessage.success('发布成功')
         } else {
@@ -271,23 +322,82 @@ const handleDelete = async (id: number) => {
   }
 }
 
-const handleImageSuccess = (response: any) => {
+const viewDetails = (id: number) => {
+  router.push({ name: 'request-detail', params: { id } })
+}
+
+const handleImageUpload = async (options: UploadRequestOptions) => {
+  try {
+    const res = await uploadFile(options.file)
+    options.onSuccess(res)
+  } catch (error) {
+    options.onError(error as any)
+  }
+}
+
+const handleVideoUpload = async (options: UploadRequestOptions) => {
+  try {
+    const res = await uploadFile(options.file)
+    options.onSuccess(res)
+  } catch (error) {
+    options.onError(error as any)
+  }
+}
+
+const beforeImageUpload: UploadProps['beforeUpload'] = (rawFile) => {
+  if (rawFile.type.indexOf('image') < 0) {
+    ElMessage.error('请上传图片文件')
+    return false
+  }
+  if (rawFile.size / 1024 / 1024 > 1) {
+    ElMessage.error('图片大小不能超过 1MB!')
+    return false
+  }
+  return true
+}
+
+const beforeVideoUpload: UploadProps['beforeUpload'] = (rawFile) => {
+  if (rawFile.type.indexOf('video') < 0) {
+    ElMessage.error('请上传视频文件')
+    return false
+  }
+  if (rawFile.size / 1024 / 1024 > 50) {
+    ElMessage.error('视频大小不能超过 50MB!')
+    return false
+  }
+  return true
+}
+
+const handleImageSuccess = (response: any, file: any) => {
+  file.response = response // Manually assign response to file object
   const currentImages = requestForm.imageFiles ? requestForm.imageFiles.split(',') : []
   currentImages.push(response.fileName)
   requestForm.imageFiles = currentImages.join(',')
 }
 
 const handleImageRemove = (file: any) => {
-  const fileNameToRemove = file.response.fileName
-  const currentImages = requestForm.imageFiles.split(',')
-  requestForm.imageFiles = currentImages.filter((name) => name !== fileNameToRemove).join(',')
+  const fileNameToRemove = file.response?.fileName
+  if (fileNameToRemove) {
+    if (file.url?.startsWith('blob:')) {
+      URL.revokeObjectURL(file.url)
+    }
+    const currentImages = requestForm.imageFiles.split(',')
+    requestForm.imageFiles = currentImages.filter((name) => name !== fileNameToRemove).join(',')
+  }
 }
 
-const handleVideoSuccess = (response: any) => {
+const handleVideoSuccess = (response: any, file: any) => {
+  file.response = response // Manually assign response to file object
   requestForm.videoFile = response.fileName
 }
 
-const handleVideoRemove = () => {
+const handleVideoRemove = (file: any) => {
+  if (file.url?.startsWith('blob:')) {
+    URL.revokeObjectURL(file.url)
+  }
+  if (videoBlobUrl.value === file.url) {
+    videoBlobUrl.value = ''
+  }
   requestForm.videoFile = ''
 }
 

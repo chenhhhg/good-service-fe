@@ -2,12 +2,14 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/store/user'
 
+
 // 创建 axios 实例
 const service = axios.create({
   baseURL: 'http://47.93.170.211:8888/api', // API 的 base_url
   // baseURL: 'http://localhost:8080/api', // API 的 base_url
   timeout: 5000, // 请求超时时间
 })
+export const baseURL = service.defaults.baseURL
 
 // request 拦截器
 service.interceptors.request.use(
