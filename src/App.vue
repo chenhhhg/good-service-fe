@@ -8,14 +8,12 @@ const isAuthRoute = computed(() => route.path === '/login' || route.path === '/r
 </script>
 
 <template>
-  <el-container class="app-container">
-    <template v-if="!isAuthRoute">
-      <AppHeader />
-    </template>
-    <el-main :class="{ 'content-with-header': !isAuthRoute }">
+  <div class="app-wrapper">
+    <AppHeader v-if="!isAuthRoute" />
+    <div :class="{ 'main-content': !isAuthRoute }">
       <router-view />
-    </el-main>
-  </el-container>
+    </div>
+  </div>
 </template>
 
 <style>
@@ -26,15 +24,13 @@ body {
     'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
 
-.app-container {
+.app-wrapper {
   min-height: 100vh;
 }
 
-.el-main {
-  padding: 20px;
-}
-
-.content-with-header {
-  margin-top: 60px; /* Height of the fixed header */
+.main-content {
+  padding-top: 60px; /* Height of the fixed header */
+  height: 100vh;
+  box-sizing: border-box;
 }
 </style>

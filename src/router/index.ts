@@ -8,7 +8,26 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: () => import('@/views/Home.vue'),
+      component: () => import('@/views/Welcome.vue'),
+    },
+    // 我需求
+    {
+      path: '/requests',
+      component: () => import('@/views/request/RequestLayout.vue'),
+      children: [
+        { path: '', redirect: '/requests/all' },
+        {
+          path: 'all',
+          name: 'all-requests',
+          component: () => import('@/views/request/AllRequests.vue'),
+        },
+        {
+          path: 'my',
+          name: 'my-requests',
+          component: () => import('@/views/request/MyRequests.vue'),
+          meta: { requiresAuth: true },
+        },
+      ],
     },
     // 认证
     {
