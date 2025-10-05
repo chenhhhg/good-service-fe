@@ -66,21 +66,44 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const userStore = useUserStore()
   const isLoggedIn = userStore.isLoggedIn
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth)
   const requiresAdmin = to.matched.some((record) => record.meta.requiresAdmin)
 
-  if (requiresAuth && !isLoggedIn) {
-    // 需要认证但未登录
-    next({ name: 'login', query: { redirect: to.fullPath } })
-  } else if (requiresAdmin && !userStore.isAdmin) {
-    // 需要管理员权限但当前用户不是
-    // 这里可以跳转到一个 403 页面或首页
-    next({ name: 'home' })
+  if (requiresAuth) {
+    if (isLoggedIn) {
+      // 已登录
+      if (userStore.userInfo) {
+        // 有用户信息，检查管理员权限
+        if (requiresAdmin && !userStore.isAdmin) {
+          next({ name: 'home' }) // 或跳转到无权限页面
+        } else {
+          next()
+        }
+      } else {
+        // 没有用户信息，尝试获取
+        try {
+          await userStore.fetchUserInfo()
+          // 再次检查管理员权限
+          if (requiresAdmin && !userStore.isAdmin) {
+            next({ name: 'home' }) // 或跳转到无权限页面
+          } else {
+            next()
+          }
+        } catch (error) {
+          // 获取用户信息失败，可能是 token 失效
+          userStore.logout()
+          next({ name: 'login', query: { redirect: to.fullPath } })
+        }
+      }
+    } else {
+      // 未登录
+      next({ name: 'login', query: { redirect: to.fullPath } })
+    }
   } else {
-    // 不需要权限或已满足权限要求
+    // 不需要认证的页面，直接放行
     next()
   }
 })

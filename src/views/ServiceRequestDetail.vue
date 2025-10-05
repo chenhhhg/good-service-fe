@@ -39,7 +39,8 @@
                 :preview-src-list="mainImageInfo.map((i) => i.url).filter(Boolean)"
                 fit="cover"
                 style="width: 100px; height: 100px; margin-right: 10px"
-                :initial-index="200000"
+                preview-teleported
+                :z-index="9999"
               >
                 <template #error>
                   <div class="image-slot">
@@ -109,7 +110,8 @@
                   :preview-src-list="row.imageInfo.map((i: any) => i.url).filter(Boolean)"
                   style="width: 50px; height: 50px"
                   fit="cover"
-                  :initial-index="200000"
+                  preview-teleported
+                  :z-index="9999"
                 >
                   <template #error>
                     <div class="image-slot">
@@ -238,8 +240,9 @@ const responseRules = reactive<FormRules>({
 const imageList = ref<UploadUserFile[]>([])
 const videoList = ref<UploadUserFile[]>([])
 
-const mainImageInfo =
-  ref<{ name: string; url: string; status: 'loading' | 'success' | 'fail' }[]>([])
+const mainImageInfo = ref<{ name: string; url: string; status: 'loading' | 'success' | 'fail' }[]>(
+  [],
+)
 const mainVideoInfo = ref<{
   name: string
   url: string
@@ -273,30 +276,45 @@ const fetchData = async () => {
         }
       })
 
-      // Process new responses
-      for (const response of fetchedResponses) {
-        response.imageInfo = []
+      // STAGE 1: Set loading state for all response images and update UI
+      const responsesWithLoading = fetchedResponses.map((response) => {
+        let imageInfo: { name: string; url: string; status: 'loading' | 'success' | 'fail' }[] = []
         if (response.imageFiles) {
           const imageFiles = response.imageFiles.split(',').filter(Boolean)
-          response.imageInfo = imageFiles.map((fileName: string) => ({
+          imageInfo = imageFiles.map((fileName) => ({
             name: fileName,
             url: '',
-            status: 'loading',
+            status: 'loading' as const,
           }))
-
-          response.imageInfo.forEach(async (img: any) => {
-            try {
-              const blob = await downloadFile(img.name)
-              img.url = URL.createObjectURL(blob)
-              img.status = 'success'
-            } catch (error) {
-              console.error(`Failed to download image ${img.name}`, error)
-              img.status = 'fail'
-            }
-          })
         }
-      }
-      responses.value = fetchedResponses
+        return { ...response, imageInfo }
+      })
+      responses.value = responsesWithLoading
+
+      // STAGE 2: Download all images and then perform the final update
+      const finalResponses = await Promise.all(
+        responsesWithLoading.map(async (response) => {
+          if (!response.imageInfo || response.imageInfo.length === 0) {
+            return response
+          }
+          const finalImageInfo = await Promise.all(
+            response.imageInfo.map((img) =>
+              downloadFile(img.name)
+                .then((blob) => ({
+                  ...img,
+                  url: URL.createObjectURL(blob),
+                  status: 'success' as const,
+                }))
+                .catch((error) => {
+                  console.error(`Failed to download response image ${img.name}`, error)
+                  return { ...img, status: 'fail' as const }
+                }),
+            ),
+          )
+          return { ...response, imageInfo: finalImageInfo }
+        }),
+      )
+      responses.value = finalResponses
     }
   } catch (error) {
     ElMessage.error('获取详情失败')
@@ -322,22 +340,33 @@ watch(
     if (newDetail) {
       if (newDetail.imageFiles) {
         const imageFiles = newDetail.imageFiles.split(',').filter(Boolean)
+        // Set a temporary loading state first
         mainImageInfo.value = imageFiles.map((fileName: string) => ({
           name: fileName,
           url: '',
           status: 'loading',
         }))
 
-        mainImageInfo.value.forEach(async (img) => {
-          try {
-            const blob = await downloadFile(img.name)
-            img.url = URL.createObjectURL(blob)
-            img.status = 'success'
-          } catch (error) {
-            console.error(`Failed to download image ${img.name}`, error)
-            img.status = 'fail'
-          }
-        })
+        // Create promises for all downloads
+        const downloadPromises = imageFiles.map((fileName: string) =>
+          downloadFile(fileName)
+            .then((blob) => ({
+              name: fileName,
+              url: URL.createObjectURL(blob),
+              status: 'success' as const,
+            }))
+            .catch((error) => {
+              console.error(`Failed to download image ${fileName}`, error)
+              return {
+                name: fileName,
+                url: '',
+                status: 'fail' as const,
+              }
+            }),
+        )
+
+        // Wait for all to complete and then update the ref in one go
+        mainImageInfo.value = await Promise.all(downloadPromises)
       }
 
       if (newDetail.videoFile) {

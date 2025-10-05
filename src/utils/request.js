@@ -2,7 +2,6 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/store/user'
 
-
 // 创建 axios 实例
 const service = axios.create({
   baseURL: 'http://47.93.170.211:8888/api', // API 的 base_url
@@ -47,6 +46,15 @@ service.interceptors.response.use(
   },
   (error) => {
     console.log('err' + error) // for debug
+    if (error.response && error.response.status === 401) {
+      const userStore = useUserStore()
+      userStore.logout()
+      // 跳转到登录页，并携带当前页面路径作为重定向地址
+      window.location.href = `/login?redirect=${window.location.pathname}`
+      ElMessage.error('登录状态已过期，请重新登录')
+      return Promise.reject(new Error('登录状态已过期，请重新登录'))
+    }
+
     let message = '请求发生错误'
     if (error.response && error.response.data && error.response.data.message) {
       // 后端返回了具体的错误信息
