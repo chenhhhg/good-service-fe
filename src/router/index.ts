@@ -29,6 +29,20 @@ const router = createRouter({
         },
       ],
     },
+    // 我服务
+    {
+      path: '/responses',
+      component: () => import('@/views/response/ResponseLayout.vue'),
+      meta: { requiresAuth: true },
+      children: [
+        { path: '', redirect: '/responses/my' },
+        {
+          path: 'my',
+          name: 'my-responses',
+          component: () => import('@/views/response/MyResponses.vue'),
+        },
+      ],
+    },
     // 认证
     {
       path: '/login',

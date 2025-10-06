@@ -7,7 +7,7 @@
       <el-menu mode="horizontal" :router="true" :default-active="$route.path" class="main-nav">
         <el-menu-item index="/">首页</el-menu-item>
         <el-menu-item index="/requests/all">我需求</el-menu-item>
-        <el-menu-item index="/user/responses">我服务</el-menu-item>
+        <el-menu-item index="/responses/my">我服务</el-menu-item>
         <!-- You can add more navigation items here -->
       </el-menu>
       <div class="user-info-container">
